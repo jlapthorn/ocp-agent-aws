@@ -153,24 +153,50 @@ fi
 
 # ── Delete DNS Records ─────────────────────────────────────────────────────────
 
-if [[ -n "${ZONE_ID:-}" && -n "${CLUSTER_NAME:-}" && -n "${BASE_DOMAIN:-}" && -n "${EIP_ADDR:-}" ]]; then
-  log "Deleting DNS records for ${CLUSTER_NAME}.${BASE_DOMAIN}..."
-  aws route53 change-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
-    --change-batch "{
-      \"Changes\": [
-        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
-          \"Name\":\"api.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
-          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
-        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
-          \"Name\":\"api-int.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
-          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
-        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
-          \"Name\":\"*.apps.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
-          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}}
-      ]
-    }" 2>/dev/null || log "Warning: DNS record deletion failed (records may have been modified)"
+if [[ -n "${ZONE_ID:-}" && -n "${CLUSTER_NAME:-}" && -n "${BASE_DOMAIN:-}" ]]; then
+  if [[ -n "${API_NLB_DNS:-}" && -n "${API_NLB_ZONE:-}" && -n "${INGRESS_NLB_DNS:-}" && -n "${INGRESS_NLB_ZONE:-}" ]]; then
+    # Multi-node: alias records pointing to NLBs
+    log "Deleting DNS alias records for ${CLUSTER_NAME}.${BASE_DOMAIN}..."
+    aws route53 change-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
+      --change-batch "{
+        \"Changes\": [
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"api.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",
+            \"AliasTarget\":{\"HostedZoneId\":\"${API_NLB_ZONE}\",
+              \"DNSName\":\"${API_NLB_DNS}\",\"EvaluateTargetHealth\":true}}},
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"api-int.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",
+            \"AliasTarget\":{\"HostedZoneId\":\"${API_NLB_ZONE}\",
+              \"DNSName\":\"${API_NLB_DNS}\",\"EvaluateTargetHealth\":true}}},
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"*.apps.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",
+            \"AliasTarget\":{\"HostedZoneId\":\"${INGRESS_NLB_ZONE}\",
+              \"DNSName\":\"${INGRESS_NLB_DNS}\",\"EvaluateTargetHealth\":true}}}
+        ]
+      }" 2>/dev/null || log "Warning: DNS record deletion failed (records may have been modified)"
+  elif [[ -n "${EIP_ADDR:-}" ]]; then
+    # SNO: A records pointing to Elastic IP
+    log "Deleting DNS records for ${CLUSTER_NAME}.${BASE_DOMAIN}..."
+    aws route53 change-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
+      --change-batch "{
+        \"Changes\": [
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"api.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+            \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"api-int.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+            \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
+          {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+            \"Name\":\"*.apps.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+            \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}}
+        ]
+      }" 2>/dev/null || log "Warning: DNS record deletion failed (records may have been modified)"
+  else
+    log "Note: DNS records could not be deleted (missing EIP_ADDR or NLB DNS info)"
+    log "  Zone: ${ZONE_ID}"
+  fi
 elif [[ -n "${ZONE_ID:-}" ]]; then
-  log "Note: DNS records could not be deleted (missing CLUSTER_NAME, BASE_DOMAIN, or EIP_ADDR)"
+  log "Note: DNS records could not be deleted (missing CLUSTER_NAME or BASE_DOMAIN)"
   log "  Zone: ${ZONE_ID}"
 fi
 
