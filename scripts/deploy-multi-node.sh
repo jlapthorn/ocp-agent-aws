@@ -60,6 +60,8 @@ check_prereqs() {
 
 save_state() {
   cat > "${INSTALL_DIR}/resource-ids.env" <<EOF
+CLUSTER_NAME=${CLUSTER_NAME:-}
+BASE_DOMAIN=${BASE_DOMAIN:-}
 VPC_ID=${VPC_ID:-}
 SUBNET_ID=${SUBNET_ID:-}
 IGW_ID=${IGW_ID:-}
@@ -422,6 +424,7 @@ aws s3 mb s3://${BUCKET_NAME} >/dev/null
 aws s3 cp agent.x86_64.raw s3://${BUCKET_NAME}/agent.x86_64.raw --quiet
 
 log "Ensuring vmimport IAM role exists..."
+ROLE_CREATED=false
 aws iam create-role --role-name vmimport \
   --assume-role-policy-document '{
     "Version": "2012-10-17",
@@ -431,7 +434,7 @@ aws iam create-role --role-name vmimport \
       "Action": "sts:AssumeRole",
       "Condition": {"StringEquals": {"sts:Externalid": "vmimport"}}
     }]
-  }' 2>/dev/null || true
+  }' 2>/dev/null && ROLE_CREATED=true || true
 
 aws iam put-role-policy --role-name vmimport \
   --policy-name vmimport-s3-policy \
@@ -448,6 +451,12 @@ aws iam put-role-policy --role-name vmimport \
       \"Resource\": \"*\"
     }]
   }"
+
+# IAM role propagation can take 10-15 seconds on first creation
+if [[ "${ROLE_CREATED}" == "true" ]]; then
+  log "Waiting for vmimport IAM role to propagate..."
+  sleep 15
+fi
 
 log "Importing EBS snapshot (this takes 5-10 minutes)..."
 IMPORT_TASK=$(aws ec2 import-snapshot \

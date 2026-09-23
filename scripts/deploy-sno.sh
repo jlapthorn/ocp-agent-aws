@@ -198,13 +198,14 @@ BUCKET_NAME="openshift-agent-iso-${CLUSTER_NAME}-$(date +%s)"
 aws s3 mb s3://${BUCKET_NAME} >/dev/null
 aws s3 cp agent.x86_64.raw s3://${BUCKET_NAME}/agent.x86_64.raw --quiet
 
+ROLE_CREATED=false
 aws iam create-role --role-name vmimport \
   --assume-role-policy-document '{
     "Version":"2012-10-17","Statement":[{"Effect":"Allow",
     "Principal":{"Service":"vmie.amazonaws.com"},
     "Action":"sts:AssumeRole",
     "Condition":{"StringEquals":{"sts:Externalid":"vmimport"}}}]
-  }' 2>/dev/null || true
+  }' 2>/dev/null && ROLE_CREATED=true || true
 
 aws iam put-role-policy --role-name vmimport --policy-name vmimport-s3-policy \
   --policy-document "{
@@ -214,6 +215,12 @@ aws iam put-role-policy --role-name vmimport --policy-name vmimport-s3-policy \
     {\"Effect\":\"Allow\",\"Action\":[\"ec2:ModifySnapshotAttribute\",\"ec2:CopySnapshot\",
      \"ec2:RegisterImage\",\"ec2:Describe*\"],\"Resource\":\"*\"}]
   }"
+
+# IAM role propagation can take 10-15 seconds on first creation
+if [[ "${ROLE_CREATED}" == "true" ]]; then
+  log "Waiting for vmimport IAM role to propagate..."
+  sleep 15
+fi
 
 log "Importing EBS snapshot..."
 IMPORT_TASK=$(aws ec2 import-snapshot \
@@ -261,6 +268,8 @@ log "Instance ${INSTANCE_ID} running at ${EIP_ADDR}"
 
 # Save resource IDs
 cat > "${INSTALL_DIR}/resource-ids.env" <<EOF
+CLUSTER_NAME=${CLUSTER_NAME}
+BASE_DOMAIN=${BASE_DOMAIN}
 VPC_ID=${VPC_ID}
 SUBNET_ID=${SUBNET_ID}
 IGW_ID=${IGW_ID}

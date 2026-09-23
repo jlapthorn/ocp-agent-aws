@@ -26,6 +26,19 @@ ALL_INSTANCES=()
 [[ -n "${MASTER_INSTANCE_IDS:-}" ]] && ALL_INSTANCES+=("${MASTER_INSTANCE_IDS[@]}")
 [[ -n "${WORKER_INSTANCE_IDS:-}" ]] && ALL_INSTANCES+=("${WORKER_INSTANCE_IDS[@]}")
 
+# Discover any additional instances in the VPC (e.g. day-2 worker nodes)
+if [[ -n "${VPC_ID:-}" ]]; then
+  EXTRA_INSTANCES=$(aws ec2 describe-instances \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || true)
+  for iid in ${EXTRA_INSTANCES}; do
+    if [[ ! " ${ALL_INSTANCES[*]:-} " =~ " ${iid} " ]]; then
+      log "Discovered additional instance in VPC: ${iid}"
+      ALL_INSTANCES+=("${iid}")
+    fi
+  done
+fi
+
 if [[ ${#ALL_INSTANCES[@]} -gt 0 ]]; then
   log "Terminating instances: ${ALL_INSTANCES[*]}"
   aws ec2 terminate-instances --instance-ids "${ALL_INSTANCES[@]}" >/dev/null 2>&1 || true
@@ -39,6 +52,19 @@ ALL_ENIS=()
 [[ -n "${ENI_ID:-}" ]] && ALL_ENIS+=("${ENI_ID}")
 [[ -n "${MASTER_ENI_IDS:-}" ]] && ALL_ENIS+=("${MASTER_ENI_IDS[@]}")
 [[ -n "${WORKER_ENI_IDS:-}" ]] && ALL_ENIS+=("${WORKER_ENI_IDS[@]}")
+
+# Discover any additional ENIs in the subnet (e.g. day-2 worker nodes)
+if [[ -n "${SUBNET_ID:-}" ]]; then
+  EXTRA_ENIS=$(aws ec2 describe-network-interfaces \
+    --filters "Name=subnet-id,Values=${SUBNET_ID}" "Name=status,Values=available" \
+    --query 'NetworkInterfaces[].NetworkInterfaceId' --output text 2>/dev/null || true)
+  for eid in ${EXTRA_ENIS}; do
+    if [[ ! " ${ALL_ENIS[*]:-} " =~ " ${eid} " ]]; then
+      log "Discovered additional ENI in subnet: ${eid}"
+      ALL_ENIS+=("${eid}")
+    fi
+  done
+fi
 
 for eni in "${ALL_ENIS[@]}"; do
   log "Deleting ENI: ${eni}"
@@ -127,8 +153,24 @@ fi
 
 # ── Delete DNS Records ─────────────────────────────────────────────────────────
 
-if [[ -n "${ZONE_ID:-}" ]]; then
-  log "Note: DNS records should be cleaned up manually or will be overwritten on next deploy"
+if [[ -n "${ZONE_ID:-}" && -n "${CLUSTER_NAME:-}" && -n "${BASE_DOMAIN:-}" && -n "${EIP_ADDR:-}" ]]; then
+  log "Deleting DNS records for ${CLUSTER_NAME}.${BASE_DOMAIN}..."
+  aws route53 change-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
+    --change-batch "{
+      \"Changes\": [
+        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+          \"Name\":\"api.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
+        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+          \"Name\":\"api-int.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}},
+        {\"Action\":\"DELETE\",\"ResourceRecordSet\":{
+          \"Name\":\"*.apps.${CLUSTER_NAME}.${BASE_DOMAIN}\",\"Type\":\"A\",\"TTL\":300,
+          \"ResourceRecords\":[{\"Value\":\"${EIP_ADDR}\"}]}}
+      ]
+    }" 2>/dev/null || log "Warning: DNS record deletion failed (records may have been modified)"
+elif [[ -n "${ZONE_ID:-}" ]]; then
+  log "Note: DNS records could not be deleted (missing CLUSTER_NAME, BASE_DOMAIN, or EIP_ADDR)"
   log "  Zone: ${ZONE_ID}"
 fi
 

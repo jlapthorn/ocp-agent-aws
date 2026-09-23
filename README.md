@@ -92,6 +92,7 @@ vi my-cluster/agent-config.yaml
 | `openshift-install` | Version matching your target OCP release (tested with 4.22.x) |
 | `oc` | OpenShift CLI for post-install verification |
 | `qemu-img` | For converting the ISO to a raw disk image |
+| `jq` | For parsing JSON responses during snapshot import |
 | AWS CLI v2 | Configured with EC2, S3, ELBv2, Route 53, IAM permissions |
 | Pull secret | From [console.redhat.com](https://console.redhat.com/openshift/install/pull-secret) |
 | Route 53 hosted zone | For DNS records (your base domain) |
