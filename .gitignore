@@ -1,0 +1,13 @@
+auth/
+*.iso
+*.raw
+*.log
+*.json
+!examples/**/*.yaml
+pull-secret*
+kubeconfig
+kubeadmin-password
+.openshift_install*
+resource-ids.env
+rendezvousIP
+.aws/

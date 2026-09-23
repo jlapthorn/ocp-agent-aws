@@ -1,0 +1,23 @@
+apiVersion: v1
+metadata:
+  name: sno                          # Cluster name — used in DNS records
+baseDomain: example.com              # Your Route 53 hosted zone domain
+networking:
+  networkType: OVNKubernetes
+  machineNetwork:
+    - cidr: 10.0.1.0/24              # Must match your VPC subnet CIDR
+  clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+  serviceNetwork:
+    - 172.30.0.0/16
+compute:
+  - name: worker
+    replicas: 0                      # SNO: no separate workers
+controlPlane:
+  name: master
+  replicas: 1                        # SNO: single control plane node
+platform:
+  none: {}                           # Required for agent-based install on EC2
+pullSecret: 'YOUR_PULL_SECRET_JSON'  # Paste from console.redhat.com
+sshKey: 'ssh-ed25519 AAAA...'        # Your public SSH key

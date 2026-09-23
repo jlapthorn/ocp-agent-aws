@@ -1,0 +1,25 @@
+apiVersion: v1beta1
+kind: AgentConfig
+metadata:
+  name: sno                          # Must match install-config.yaml metadata.name
+rendezvousIP: 10.0.1.100             # Private IP of the pre-created ENI
+hosts:
+  - hostname: sno
+    role: master
+    rootDeviceHints:
+      minSizeGigabytes: 100          # Selects the 120 GB install target, skips 16 GB ISO disk
+    interfaces:
+      - name: ens5                   # Default ENI interface name on EC2 Nitro instances
+        macAddress: "02:xx:xx:xx:xx:xx"  # MAC from your pre-created ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2              # AWS VPC DNS resolver (VPC CIDR base + 2)

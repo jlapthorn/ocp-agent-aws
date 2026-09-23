@@ -1,0 +1,125 @@
+apiVersion: v1beta1
+kind: AgentConfig
+metadata:
+  name: ocp                          # Must match install-config.yaml metadata.name
+rendezvousIP: 10.0.1.101             # Private IP of master-0's ENI (runs assisted-service)
+hosts:
+  - hostname: master-0
+    role: master
+    rootDeviceHints:
+      minSizeGigabytes: 100          # Selects the 120 GB disk, skips the 16 GB ISO disk
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:01"  # MAC from master-0 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: master-1
+    role: master
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:02"  # MAC from master-1 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: master-2
+    role: master
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:03"  # MAC from master-2 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: worker-0
+    role: worker
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:04"  # MAC from worker-0 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: worker-1
+    role: worker
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:05"  # MAC from worker-1 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: worker-2
+    role: worker
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:06"  # MAC from worker-2 ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
