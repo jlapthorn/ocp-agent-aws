@@ -78,6 +78,11 @@ if [[ -n "${EIP_ALLOC:-}" ]]; then
   aws ec2 release-address --allocation-id "${EIP_ALLOC}" 2>/dev/null || true
 fi
 
+if [[ -n "${REGISTRY_EIP_ALLOC:-}" ]]; then
+  log "Releasing registry EIP: ${REGISTRY_EIP_ALLOC}"
+  aws ec2 release-address --allocation-id "${REGISTRY_EIP_ALLOC}" 2>/dev/null || true
+fi
+
 # ── Delete Load Balancers ──────────────────────────────────────────────────────
 
 for nlb_arn in "${API_NLB_ARN:-}" "${INGRESS_NLB_ARN:-}"; do

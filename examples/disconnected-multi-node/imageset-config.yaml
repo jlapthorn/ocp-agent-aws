@@ -1,0 +1,10 @@
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v2alpha1
+mirror:
+  platform:
+    architectures:
+      - amd64
+    channels:
+      - name: stable-4.22        # OCP release channel
+        minVersion: 4.22.11      # Pin to exact version
+        maxVersion: 4.22.11

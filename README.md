@@ -6,12 +6,25 @@ Because EC2 cannot boot from ISO files directly, the workflow converts the ISO i
 
 ## Deployment Options
 
+### Connected (internet access)
+
 | Guide | Topology | Instance Types |
 |-------|----------|----------------|
 | [Single Node OpenShift (SNO)](docs/sno-deployment.md) | 1 node (control plane + worker) | m6i.2xlarge |
 | [Multi-Node Cluster (3+3)](docs/multi-node-deployment.md) | 3 control plane + 3 worker | m5.2xlarge (masters) + m5.xlarge (workers) |
 
+### Disconnected (mirror registry)
+
+| Guide | Topology | Instance Types |
+|-------|----------|----------------|
+| [Disconnected SNO](docs/disconnected-sno-deployment.md) | 1 registry + 1 node | t3.medium (registry) + m6i.2xlarge (SNO) |
+| [Disconnected Multi-Node (3+3)](docs/disconnected-multi-node-deployment.md) | 1 registry + 3 control plane + 3 worker | t3.medium (registry) + m5.2xlarge (masters) + m5.xlarge (workers) |
+
+Disconnected deployments deploy a private Docker v2 registry on a separate EC2 instance, mirror OCP release images to it with [oc-mirror v2](https://docs.openshift.com/container-platform/latest/installing/disconnected_install/about-installing-oc-mirror-v2.html), and install OpenShift using only the mirror registry for image pulls. The cluster nodes access the registry over the VPC private network.
+
 ## Architecture
+
+### Connected multi-node (3+3)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -35,6 +48,32 @@ Because EC2 cannot boot from ISO files directly, the workflow converts the ISO i
 │   │              NLB (API :6443, :22623)           │──── api.ocp.example  │
 │   │              NLB (Ingress :80, :443)           │──── *.apps.ocp.ex..  │
 │   └───────────────────────────────────────────────┘                      │
+│                                                                          │
+│   Internet Gateway ──── Route Table (0.0.0.0/0 → IGW)                   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Disconnected (mirror registry)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         AWS VPC (10.0.0.0/16)                           │
+│                                                                          │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │                    Subnet (10.0.1.0/24)                          │   │
+│   │                                                                  │   │
+│   │   ┌──────────────────────┐                                      │   │
+│   │   │  Registry (t3.medium)│                                      │   │
+│   │   │  .50:5000 ── EIP     │ ←── oc-mirror (from workstation)     │   │
+│   │   │  Docker + registry:2 │                                      │   │
+│   │   └──────────┬───────────┘                                      │   │
+│   │              │ (private VPC)                                     │   │
+│   │              ▼                                                   │   │
+│   │   ┌──────────┐  ┌──────────┐  ┌──────────┐                     │   │
+│   │   │ master-0 │  │ master-1 │  │ master-2 │  Pull from .50:5000  │   │
+│   │   │ .101     │  │ .102     │  │ .103     │                      │   │
+│   │   └──────────┘  └──────────┘  └──────────┘                     │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │   Internet Gateway ──── Route Table (0.0.0.0/0 → IGW)                   │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -66,23 +105,36 @@ The AMI must be registered with `--boot-mode uefi-preferred`. Without this, Core
 
 SNO uses an Elastic IP pointed directly at the single node. Multi-node clusters need a Network Load Balancer to distribute API (6443) and ingress (80/443) traffic across nodes, with Route 53 alias records pointing to the NLB.
 
+### Mirror registry for disconnected installs
+
+A Docker v2 registry (`registry:2`) runs on a separate EC2 instance within the same VPC. OCP release images are mirrored from Red Hat registries to the private mirror using `oc-mirror v2`. The SNO/cluster nodes pull all images from the mirror over the private VPC network (`10.0.1.50:5000`), while the workstation pushes images via the registry's public EIP. The install-config.yaml uses `imageContentSources` to rewrite image references and `additionalTrustBundle` to trust the self-signed registry certificate.
+
 ## Quick Start
 
+### Connected deployment
+
 ```bash
-# Clone this repo
 git clone https://github.com/jlapthorn/ocp-agent-aws.git
 cd ocp-agent-aws
 
-# Copy and edit the example configs
-cp examples/multi-node/install-config.yaml my-cluster/
-cp examples/multi-node/agent-config.yaml my-cluster/
+# SNO
+export CLUSTER_NAME=sno BASE_DOMAIN=example.com
+export INSTALL_DIR=~/sno-agent-aws PULL_SECRET_FILE=~/pull-secret.json
+export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
+./scripts/deploy-sno.sh
 
-# Edit with your pull secret, SSH key, MAC addresses, and domain
-vi my-cluster/install-config.yaml
-vi my-cluster/agent-config.yaml
-
-# Use the deployment script
+# Multi-node (3+3)
 ./scripts/deploy-multi-node.sh
+```
+
+### Disconnected deployment
+
+```bash
+# SNO with mirror registry
+export CLUSTER_NAME=sno BASE_DOMAIN=example.com
+export INSTALL_DIR=~/sno-disconnected-aws PULL_SECRET_FILE=~/pull-secret.json
+export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
+./scripts/deploy-sno-disconnected.sh
 ```
 
 ## Prerequisites
@@ -91,6 +143,7 @@ vi my-cluster/agent-config.yaml
 |-------------|---------|
 | `openshift-install` | Version matching your target OCP release (tested with 4.22.x) |
 | `oc` | OpenShift CLI for post-install verification |
+| `oc-mirror` v2 | Mirror container images for disconnected deployments |
 | `qemu-img` | For converting the ISO to a raw disk image |
 | `jq` | For parsing JSON responses during snapshot import |
 | AWS CLI v2 | Configured with EC2, S3, ELBv2, Route 53, IAM permissions |
@@ -103,19 +156,30 @@ vi my-cluster/agent-config.yaml
 .
 ├── README.md
 ├── docs/
-│   ├── sno-deployment.md          # Single Node OpenShift guide
-│   └── multi-node-deployment.md   # 3+3 multi-node cluster guide
+│   ├── sno-deployment.md                      # Connected SNO guide
+│   ├── multi-node-deployment.md               # Connected 3+3 multi-node guide
+│   ├── disconnected-sno-deployment.md         # Disconnected SNO with mirror registry
+│   └── disconnected-multi-node-deployment.md  # Disconnected 3+3 with mirror registry
 ├── examples/
 │   ├── sno/
 │   │   ├── install-config.yaml
 │   │   └── agent-config.yaml
-│   └── multi-node/
+│   ├── multi-node/
+│   │   ├── install-config.yaml
+│   │   └── agent-config.yaml
+│   ├── disconnected-sno/
+│   │   ├── install-config.yaml        # + imageContentSources, additionalTrustBundle
+│   │   ├── agent-config.yaml
+│   │   └── imageset-config.yaml       # oc-mirror v2 ImageSetConfiguration
+│   └── disconnected-multi-node/
 │       ├── install-config.yaml
-│       └── agent-config.yaml
+│       ├── agent-config.yaml
+│       └── imageset-config.yaml
 └── scripts/
-    ├── deploy-multi-node.sh       # Full deployment automation
-    ├── deploy-sno.sh              # SNO deployment automation
-    └── cleanup.sh                 # Resource teardown
+    ├── deploy-sno.sh                  # Connected SNO deployment
+    ├── deploy-multi-node.sh           # Connected multi-node deployment
+    ├── deploy-sno-disconnected.sh     # Disconnected SNO deployment
+    └── cleanup.sh                     # Resource teardown (all topologies)
 ```
 
 ## Lessons Learned
@@ -130,3 +194,6 @@ These are hard-won findings from deploying on EC2 — not documented in the Open
 | Agent cannot match host (MAC 00:00:00:00:00:00) | ENI MAC not known at ISO generation time | Pre-create ENIs before generating the ISO |
 | Master node RAM validation fails on m5.xlarge | m5.xlarge reports 15.75 GiB, masters require 16.00 GiB | Use m5.2xlarge (32 GiB) for master nodes |
 | NTP sync validation fails | chrony takes 30–60 seconds to sync on first boot | Self-resolving — wait for chrony to synchronize |
+| Podman not available on Amazon Linux 2023 | Default repos do not include podman | Use Docker (`dnf install docker`) for the mirror registry container |
+| oc-mirror fails partway through | Network timeouts on large blob uploads | Re-run the same command — oc-mirror v2 is idempotent |
+| Node stops instead of rebooting | Agent installer on EC2 occasionally triggers shutdown instead of reboot | Manually start the instance — installation resumes automatically |
