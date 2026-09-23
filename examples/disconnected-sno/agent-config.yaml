@@ -1,0 +1,25 @@
+apiVersion: v1beta1
+kind: AgentConfig
+metadata:
+  name: sno                          # Must match install-config.yaml
+rendezvousIP: 10.0.1.100             # Static IP assigned to the ENI
+hosts:
+  - hostname: sno
+    role: master
+    rootDeviceHints:
+      minSizeGigabytes: 100          # Selects the 120 GB install disk (not 16 GB boot)
+    interfaces:
+      - name: ens5                   # Default ENI name on Nitro instances
+        macAddress: "AA:BB:CC:DD:EE:FF"  # From the pre-provisioned ENI
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2              # VPC DNS resolver
