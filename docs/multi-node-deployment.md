@@ -629,3 +629,148 @@ aws ec2 start-instances --instance-ids ${MASTER_INSTANCE_IDS[@]} ${WORKER_INSTAN
 ```
 
 After restart, cluster operators typically converge within 5–10 minutes.
+
+## Adding Worker Nodes to a Running Cluster
+
+You can add worker nodes to an existing cluster using `oc adm node-image create`. This generates a node-specific ISO from the running cluster — no need to regenerate the original agent ISO or re-run `openshift-install`.
+
+### 1 — Create an ENI for the new worker
+
+```bash
+WORKER_IP="10.0.1.114"
+
+ENI_ID=$(aws ec2 create-network-interface \
+  --subnet-id ${SUBNET_ID} --groups ${SG_ID} \
+  --private-ip-address ${WORKER_IP} \
+  --description "OCP worker-3" \
+  --query 'NetworkInterface.NetworkInterfaceId' --output text)
+MAC=$(aws ec2 describe-network-interfaces \
+  --network-interface-ids ${ENI_ID} \
+  --query 'NetworkInterfaces[0].MacAddress' --output text)
+
+echo "ENI=${ENI_ID} MAC=${MAC}"
+```
+
+### 2 — Create a nodes-config.yaml
+
+```yaml
+hosts:
+  - hostname: worker-3
+    interfaces:
+      - name: ens5
+        macAddress: "02:xx:xx:xx:xx:xx"   # MAC from the ENI created above
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+```
+
+Save this to a working directory (e.g. `${INSTALL_DIR}/worker3/nodes-config.yaml`).
+
+> For a single node with minimal configuration, you can skip the config file and use flags instead: `oc adm node-image create --mac-address=02:xx:xx:xx:xx:xx --hostname=worker-3`. Note that `--root-device-hint=minSizeGigabytes:100` currently has a bug where the value is passed as a string instead of an integer — use the config file approach on EC2 where root device hints are needed.
+
+### 3 — Generate the node image ISO
+
+```bash
+oc adm node-image create \
+  --dir=${INSTALL_DIR}/worker3 \
+  -o=node.x86_64.iso
+```
+
+This creates a pod on the cluster that pulls the release payload and generates a customized ISO. Takes approximately 5 minutes.
+
+### 4 — Convert ISO to AMI and launch
+
+The same ISO-to-AMI process as the initial deployment:
+
+```bash
+cd ${INSTALL_DIR}/worker3
+qemu-img convert -f raw -O raw node.x86_64.iso node.x86_64.raw
+
+aws s3 cp node.x86_64.raw s3://${BUCKET_NAME}/node.x86_64.raw
+
+IMPORT_TASK=$(aws ec2 import-snapshot \
+  --description "OCP worker-3 node image" \
+  --disk-container "{\"Format\":\"RAW\",\"UserBucket\":{
+    \"S3Bucket\":\"${BUCKET_NAME}\",\"S3Key\":\"node.x86_64.raw\"}}" \
+  --query 'ImportTaskId' --output text)
+
+# Poll until complete, then register AMI
+AMI_ID=$(aws ec2 register-image \
+  --name "ocp-worker3-$(date +%Y%m%d%H%M)" \
+  --architecture x86_64 --root-device-name /dev/sda1 \
+  --boot-mode uefi-preferred --ena-support --virtualization-type hvm \
+  --block-device-mappings "[
+    {\"DeviceName\":\"/dev/sda1\",\"Ebs\":{
+      \"SnapshotId\":\"${SNAP_ID}\",\"VolumeSize\":16,
+      \"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}},
+    {\"DeviceName\":\"/dev/sdb\",\"Ebs\":{
+      \"VolumeSize\":120,\"VolumeType\":\"gp3\",
+      \"DeleteOnTermination\":true}}
+  ]" --query 'ImageId' --output text)
+
+INSTANCE_ID=$(aws ec2 run-instances \
+  --image-id ${AMI_ID} --instance-type m5.xlarge \
+  --key-name ocp-agent-key \
+  --network-interfaces "DeviceIndex=0,NetworkInterfaceId=${ENI_ID}" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=ocp-worker-3}]" \
+  --query 'Instances[0].InstanceId' --output text)
+```
+
+### 5 — Register the new worker in ingress target groups
+
+```bash
+aws elbv2 register-targets --target-group-arn ${HTTP_TG_ARN} \
+  --targets Id=${WORKER_IP}
+aws elbv2 register-targets --target-group-arn ${HTTPS_TG_ARN} \
+  --targets Id=${WORKER_IP}
+```
+
+### 6 — Monitor and approve CSRs
+
+Monitor the node joining the cluster:
+
+```bash
+oc adm node-image monitor --ip-addresses ${WORKER_IP}
+```
+
+The new node requires two CSR approvals — one for the kubelet client certificate and one for the kubelet serving certificate. These typically appear 2-5 minutes apart:
+
+```bash
+# Check for pending CSRs
+oc get csr | grep Pending
+
+# Approve all pending CSRs
+oc get csr -o name | xargs oc adm certificate approve
+```
+
+Wait for the second CSR after approving the first — the kubelet serving certificate request appears once the node has joined the cluster.
+
+### 7 — Verify
+
+```bash
+oc get nodes
+```
+
+The new worker should appear as `Ready` within a few minutes of approving both CSRs.
+
+### Day-2 add-node timeline
+
+| Time | Stage |
+|------|-------|
+| 0:00 | Instance boots, agent starts |
+| 0:02 | Host discovered, validation passes |
+| 0:03 | RHCOS written, UEFI boot order set, reboot |
+| 0:05 | Kubelet starts, first CSR appears (approve it) |
+| 0:07 | Node joins cluster, second CSR appears (approve it) |
+| 0:08 | Node is Ready |
