@@ -1,0 +1,43 @@
+# LocalVolumeSet — claims the spare 120 GB disk on each storage node
+#
+# Produces one 120Gi PV per node on StorageClass `localblock`, which the
+# StorageCluster in 04 then consumes as OSD backing devices.
+#
+#   oc apply -f 02-localvolumeset.yaml
+#   oc get pv                                    # expect 3 x 120Gi Available
+
+apiVersion: local.storage.openshift.io/v1alpha1
+kind: LocalVolumeSet
+metadata:
+  name: odf-local-block
+  namespace: openshift-local-storage
+spec:
+  # Restrict to the nodes labelled by add-odf-nodes.sh, so LSO never touches
+  # disks on the control plane or the general compute workers.
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: cluster.ocs.openshift.io/openshift-storage
+            operator: Exists
+
+  # REQUIRED when the storage nodes are tainted. LSO's diskmaker and discovery
+  # DaemonSets run on the nodes themselves; without this toleration they are
+  # never scheduled, no devices are discovered, no PVs appear, and the
+  # StorageCluster sits waiting for PVCs that will never bind.
+  tolerations:
+    - key: node.ocs.openshift.io/storage
+      value: "true"
+      effect: NoSchedule
+
+  storageClassName: localblock
+  volumeMode: Block             # ODF wants raw block, not a filesystem
+
+  deviceInclusionSpec:
+    deviceTypes:
+      - disk                    # whole disks only, not partitions
+    # The ODF disk is 120 GB (~111.8 GiB), so a 100Gi floor includes it while
+    # excluding the 16 GB agent-ISO disk. The 120 GB RHCOS target is the same
+    # size but is skipped automatically: LSO ignores devices that already
+    # carry a partition table or filesystem.
+    minSize: 100Gi
+    maxSize: 200Gi

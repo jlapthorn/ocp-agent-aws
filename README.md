@@ -24,7 +24,7 @@ Because EC2 cannot boot from ISO files directly, the workflow converts the ISO i
 
 | Guide | What it adds | Instance Types |
 |-------|--------------|----------------|
-| [ODF Storage Nodes](docs/odf-storage-nodes.md) | 3 dedicated storage nodes, each with an extra raw 120 GB EBS volume for OpenShift Data Foundation | m5.2xlarge |
+| [ODF Storage Nodes](docs/odf-storage-nodes.md) | 3 dedicated storage nodes with extra raw 120 GB EBS volumes, plus the full OpenShift Data Foundation install | m5.2xlarge |
 
 Day-2 nodes are added with `oc adm node-image create` against the running cluster — no need to regenerate the original agent ISO or keep installer state.
 
@@ -151,6 +151,9 @@ export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
 # Against a cluster already deployed with deploy-multi-node.sh
 export INSTALL_DIR=~/ocp-agent-aws AWS_REGION=us-east-2
 ./scripts/add-odf-nodes.sh
+
+# Then install ODF itself onto those nodes
+./scripts/install-odf.sh
 ```
 
 ## Prerequisites
@@ -194,12 +197,14 @@ export INSTALL_DIR=~/ocp-agent-aws AWS_REGION=us-east-2
 │   │   ├── agent-config.yaml
 │   │   └── imageset-config.yaml
 │   └── odf-nodes/
-│       └── nodes-config.yaml          # Day-2 node definitions for oc adm node-image create
+│       ├── nodes-config.yaml          # Day-2 node definitions for oc adm node-image create
+│       └── odf-install/               # LSO + ODF operator + StorageCluster manifests
 └── scripts/
     ├── deploy-sno.sh                  # Connected SNO deployment
     ├── deploy-multi-node.sh           # Connected multi-node deployment
     ├── deploy-sno-disconnected.sh     # Disconnected SNO deployment
     ├── add-odf-nodes.sh               # Day-2 ODF storage nodes
+    ├── install-odf.sh                 # Day-2 ODF install (LSO + ODF + StorageCluster)
     └── cleanup.sh                     # Resource teardown (all topologies)
 ```
 
@@ -221,4 +226,7 @@ These are hard-won findings from deploying on EC2 — not documented in the Open
 | `nmstatectl: executable file not found` | `openshift-install` shells out to it to validate every host's `networkConfig`; not in the prerequisites | `dnf install nmstate`, or extract the binary from the RPM if you lack root |
 | RHCOS installs onto the ODF data disk | A second ≥100 GB volume makes `rootDeviceHints.minSizeGigabytes` ambiguous | Attach extra data volumes *after* the node joins, not in the AMI |
 | Data volumes survive `cleanup.sh` | Volumes from `create-volume` default to `DeleteOnTermination=false`, and cleanup only terminates instances | Set `DeleteOnTermination=true` via `modify-instance-attribute` after attaching |
+| LSO discovers no devices on tainted nodes | The diskmaker and discovery DaemonSets run on the nodes and are never scheduled; nothing reports an error | Add a toleration for `node.ocs.openshift.io/storage` to the `LocalVolumeSet` |
+| ODF installs but the console UI never appears | Installing via a YAML `Subscription` does not enable the console plugin — only the OperatorHub UI flow does | `oc patch console.operator.openshift.io cluster --type=json -p '[{"op":"add","path":"/spec/plugins/-","value":"odf-console"}]'` |
+| ODF pods stay `Pending` on m5.2xlarge | The default resource profile is sized for 16 vCPU / 64 GiB nodes | Set `resourceProfile: lean` on the `StorageCluster` |
 | Hundreds of `Failed` router pods | Router pods bind host ports 80/443, so only one runs per node; rejected pods accumulate | Cosmetic. `oc delete pods -n openshift-ingress --field-selector status.phase=Failed` |

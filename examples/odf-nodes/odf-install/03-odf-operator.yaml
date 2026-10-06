@@ -1,0 +1,46 @@
+# OpenShift Data Foundation operator
+#
+# Installing odf-operator also creates an `odf-dependencies` Subscription,
+# which pulls in ocs-operator, rook-ceph, mcg/noobaa, cephcsi, csi-addons and
+# others — 11 CSVs in total on 4.21. The dependency bundles spend a few
+# minutes in BundleUnpacking before anything else appears, and the
+# StorageCluster CRD only exists once they land. That wait is normal; do not
+# assume it has stalled.
+#
+#   oc apply -f 03-odf-operator.yaml
+#   oc get csv -n openshift-storage -w
+#   oc get crd storageclusters.ocs.openshift.io
+#
+# AFTERWARDS: enable the console plugin. Installing by Subscription does NOT
+# do this, unlike installing through the web console's OperatorHub:
+#
+#   oc patch console.operator.openshift.io cluster --type=json \
+#     -p '[{"op":"add","path":"/spec/plugins/-","value":"odf-console"}]'
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-storage
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-storage-operatorgroup
+  namespace: openshift-storage
+spec:
+  targetNamespaces:
+    - openshift-storage
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: odf-operator
+  namespace: openshift-storage
+spec:
+  channel: stable-4.21          # Match the cluster's OCP minor version
+  name: odf-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
