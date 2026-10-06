@@ -1,0 +1,74 @@
+# nodes-config.yaml — day-2 node addition via `oc adm node-image create`
+#
+# Consumed by:
+#   oc adm node-image create --dir=<dir containing this file> -o=node.x86_64.iso
+#
+# Unlike install-config.yaml / agent-config.yaml, this file is read by the
+# RUNNING cluster: `oc adm node-image create` starts a pod that pulls the
+# release payload and bakes these host definitions into a node ISO. There is no
+# pull secret or SSH key here — both are inherited from the cluster.
+#
+# NOTE ON ODF DATA DISKS
+# Do not add the ODF data volume to the AMI used to boot these nodes. With a
+# 120 GB install target and a 120 GB ODF disk, `minSizeGigabytes: 100` matches
+# both, and NVMe device ordering on EC2 is non-deterministic — the agent can
+# install RHCOS onto the ODF volume. Boot with two disks, let the node join,
+# then attach the data volume. See docs/odf-storage-nodes.md.
+
+hosts:
+  - hostname: odf-0                     # Becomes the Kubernetes node name
+    interfaces:
+      - name: ens5                      # Predictable NIC name on EC2 Nitro
+        macAddress: "02:ff:c9:2f:19:a1" # MAC of the pre-created ENI for this node
+    rootDeviceHints:
+      minSizeGigabytes: 100             # Picks the 120 GB install target over the 16 GB ISO disk
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true                  # The ENI's fixed private IP arrives via DHCP
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2                  # VPC resolver — VPC CIDR base + 2
+
+  - hostname: odf-1
+    interfaces:
+      - name: ens5
+        macAddress: "02:ff:c8:0d:13:a3"
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2
+
+  - hostname: odf-2
+    interfaces:
+      - name: ens5
+        macAddress: "02:ff:eb:93:ce:6d"
+    rootDeviceHints:
+      minSizeGigabytes: 100
+    networkConfig:
+      interfaces:
+        - name: ens5
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+      dns-resolver:
+        config:
+          server:
+            - 10.0.0.2

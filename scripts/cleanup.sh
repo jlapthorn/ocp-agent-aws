@@ -122,15 +122,20 @@ done
 
 # ── Deregister AMI and Delete Snapshot ─────────────────────────────────────────
 
-if [[ -n "${AMI_ID:-}" ]]; then
-  log "Deregistering AMI: ${AMI_ID}"
-  aws ec2 deregister-image --image-id "${AMI_ID}" 2>/dev/null || true
-fi
+# ODF_AMI_ID / ODF_SNAP_ID are appended to resource-ids.env by add-odf-nodes.sh
+for ami in "${AMI_ID:-}" "${ODF_AMI_ID:-}"; do
+  if [[ -n "${ami}" ]]; then
+    log "Deregistering AMI: ${ami}"
+    aws ec2 deregister-image --image-id "${ami}" 2>/dev/null || true
+  fi
+done
 
-if [[ -n "${SNAP_ID:-}" ]]; then
-  log "Deleting snapshot: ${SNAP_ID}"
-  aws ec2 delete-snapshot --snapshot-id "${SNAP_ID}" 2>/dev/null || true
-fi
+for snap in "${SNAP_ID:-}" "${ODF_SNAP_ID:-}"; do
+  if [[ -n "${snap}" ]]; then
+    log "Deleting snapshot: ${snap}"
+    aws ec2 delete-snapshot --snapshot-id "${snap}" 2>/dev/null || true
+  fi
+done
 
 # ── Delete S3 Bucket ──────────────────────────────────────────────────────────
 

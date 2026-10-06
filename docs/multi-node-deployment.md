@@ -634,6 +634,8 @@ After restart, cluster operators typically converge within 5–10 minutes.
 
 You can add worker nodes to an existing cluster using `oc adm node-image create`. This generates a node-specific ISO from the running cluster — no need to regenerate the original agent ISO or re-run `openshift-install`.
 
+> Adding nodes that need an **extra data volume** (for OpenShift Data Foundation, for example) requires care: a second disk of 100 GB or more makes `rootDeviceHints.minSizeGigabytes` ambiguous and the agent may install RHCOS onto it. See [Adding ODF Storage Nodes](odf-storage-nodes.md) for the automated flow and the reasoning.
+
 ### 1 — Create an ENI for the new worker
 
 ```bash
