@@ -54,7 +54,7 @@ MIRROR_WORKSPACE="${INSTALL_DIR}/mirror"
 log() { echo "$(date +%H:%M:%S) ── $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-for cmd in openshift-install oc oc-mirror qemu-img aws jq; do
+for cmd in openshift-install oc oc-mirror qemu-img aws jq nmstatectl; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd not found in PATH"
 done
 [[ -f "$PULL_SECRET_FILE" ]] || die "Pull secret not found: $PULL_SECRET_FILE"
@@ -294,7 +294,7 @@ log "EIP: ${EIP_ADDR}"
 
 log "Creating DNS records..."
 ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "${BASE_DOMAIN}" \
-  --query 'HostedZones[0].Id' --output text | sed 's|/hostedzone/||')
+  --query "HostedZones[?Name=='${BASE_DOMAIN}.'].Id | [0]" --output text | sed 's|/hostedzone/||')
 [[ -z "${ZONE_ID}" || "${ZONE_ID}" == "None" ]] && die "No Route 53 zone for ${BASE_DOMAIN}"
 
 aws route53 change-resource-record-sets --hosted-zone-id ${ZONE_ID} \
@@ -452,6 +452,7 @@ AMI_ID=$(aws ec2 register-image \
       \"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}
   ]" --query 'ImageId' --output text)
 log "AMI: ${AMI_ID}"
+save_state
 
 # ── Step 7: Launch Instance ────────────────────────────────────────────────────
 
