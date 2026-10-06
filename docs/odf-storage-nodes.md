@@ -240,13 +240,131 @@ The alternative is asymmetric sizing — make the install target 150 GB, keep OD
 
 ## Installing ODF
 
-These nodes are prepared, not provisioned — no operator, no `StorageCluster`, no storage classes. To finish:
+Once the nodes are in place, [`install-odf.sh`](../scripts/install-odf.sh) does the whole install:
 
-1. Install the **Local Storage Operator** and create a `LocalVolumeSet` matching `nvme2n1` on nodes labelled `cluster.ocs.openshift.io/openshift-storage`.
-2. Install the **OpenShift Data Foundation** operator.
-3. Create a `StorageCluster` in internal mode backed by the local volume set.
+```bash
+export INSTALL_DIR=~/ocp-agent-aws
+./scripts/install-odf.sh
+```
 
-With three nodes and one 120 GB device each, ODF's default 3-way replication yields roughly 120 GB of usable capacity.
+About 25–30 minutes. Overridable settings:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ODF_CHANNEL` | auto | Derived from the cluster's OCP minor, e.g. `stable-4.21` |
+| `RESOURCE_PROFILE` | `lean` | `lean`, `balanced` or `performance` |
+| `DEVICE_SIZE` | `120Gi` | Must match the data disk |
+| `LOCAL_SC` | `localblock` | StorageClass name for the LSO-backed PVs |
+
+The manifests it applies are in [`examples/odf-nodes/odf-install/`](../examples/odf-nodes/odf-install/) and can be applied by hand in numeric order.
+
+### Step 1 — Local Storage Operator
+
+On `platform: none` there is no cloud volume provisioner, so LSO is what turns the raw disk into a PV. Subscribe to the `stable` channel in `openshift-local-storage` and wait for the CSV to reach `Succeeded`.
+
+### Step 2 — LocalVolumeSet
+
+This is the step with a trap in it. The storage nodes carry a `NoSchedule` taint, and LSO's diskmaker and discovery DaemonSets run **on the nodes themselves** — so the `LocalVolumeSet` must carry a matching toleration:
+
+```yaml
+  tolerations:
+    - key: node.ocs.openshift.io/storage
+      value: "true"
+      effect: NoSchedule
+```
+
+Without it the DaemonSets are never scheduled, no devices are discovered, no PVs appear, and the `StorageCluster` later sits forever waiting on PVCs that cannot bind. Nothing reports an error — you just get silence.
+
+`minSize: 100Gi` includes the 120 GB data disk (~111.8 GiB) and excludes the 16 GB ISO disk. The 120 GB RHCOS target is the same size but is skipped automatically, because LSO ignores devices that already carry a partition table.
+
+Expect one `Available` PV per node:
+
+```
+local-pv-73ad36c5   120Gi   RWO   Delete   Available   localblock
+local-pv-992be2b0   120Gi   RWO   Delete   Available   localblock
+local-pv-e48d130    120Gi   RWO   Delete   Available   localblock
+```
+
+### Step 3 — ODF operator
+
+Subscribing to `odf-operator` also creates an `odf-dependencies` Subscription, which pulls in `ocs-operator`, `rook-ceph-operator`, `mcg-operator`, `cephcsi-operator`, `odf-csi-addons-operator` and the rest — **11 CSVs** on 4.21.
+
+Those bundles sit in `BundleUnpacking / UnpackingInProgress` for several minutes with nothing else visible, and `storageclusters.ocs.openshift.io` does not exist until they land. That wait is normal. Confirm the catalog is healthy rather than assuming it has stalled:
+
+```bash
+oc get sub odf-dependencies -n openshift-storage \
+  -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+```
+
+### Step 4 — StorageCluster
+
+Internal mode, `replica: 3`, `portable: false` because local disks cannot migrate between nodes.
+
+`resourceProfile: lean` matters on `m5.2xlarge`. ODF's default profile is sized for 16 vCPU / 64 GiB nodes; with 8 vCPU / 32 GiB the default requests do not fit and pods stay `Pending`.
+
+Reaching `Ready` takes 10–15 minutes. OSDs are created one at a time, so mid-rollout you will see warnings that resolve themselves:
+
+```
+message: Processing OSD 0 on PVC "ocs-deviceset-localblock-0-data-0fz9zb"
+detail:  1 osds down
+detail:  Reduced data availability: 4 pgs inactive, 4 pgs peering
+```
+
+### Step 5 — Enable the console plugin
+
+**A Subscription-based install does not enable the ODF console plugin.** Only the web console's OperatorHub flow does that. The `odf-console` pod runs and the `ConsolePlugin` CR is registered, but it is absent from the console operator's plugin list, so Data Foundation never appears in the UI:
+
+```bash
+oc patch console.operator.openshift.io cluster --type=json \
+  -p '[{"op":"add","path":"/spec/plugins/-","value":"odf-console"}]'
+```
+
+The console pods redeploy; hard-refresh any open browser tab.
+
+### Verify
+
+```bash
+oc get storagecluster -n openshift-storage
+oc get cephcluster -n openshift-storage
+oc get sc
+```
+
+Expected on success:
+
+```
+ocs-storagecluster   Ready   4.21.13
+
+localblock
+ocs-storagecluster-ceph-rbd
+ocs-storagecluster-ceph-rgw
+ocs-storagecluster-cephfs
+openshift-storage.noobaa.io
+```
+
+A healthy fresh install still reports three `AUTH_INSECURE_*` warnings about Ceph key types. They are defaults, not a fault. A transient `PG_AVAILABILITY` warning clears within a minute or two of the last OSD joining.
+
+Prove it end to end by binding a PVC:
+
+```bash
+oc create -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: odf-smoke-test
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ocs-storagecluster-ceph-rbd
+  resources:
+    requests:
+      storage: 5Gi
+EOF
+oc get pvc odf-smoke-test -n default
+```
+
+### Capacity
+
+Three nodes × 120 GiB = 360 GiB raw. With Ceph's 3-way replication that is roughly **120 GiB usable**.
 
 ## Resource Summary
 

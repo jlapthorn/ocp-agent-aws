@@ -1,0 +1,45 @@
+# StorageCluster — internal mode, backed by the local disks from 02
+#
+# Creates 3 OSDs (one per node), MON quorum, MGRs, CephFS, RGW and NooBaa.
+# Roughly 10-12 minutes to reach phase Ready. OSDs come up one at a time, so
+# transient "1 osds down" and "pgs peering" warnings during rollout are
+# expected rather than a fault.
+#
+#   oc apply -f 04-storagecluster.yaml
+#   oc get storagecluster -n openshift-storage -w
+#
+# Capacity: 3 x 120 GiB raw = 360 GiB, 3-way replication, ~120 GiB usable.
+
+apiVersion: ocs.openshift.io/v1
+kind: StorageCluster
+metadata:
+  name: ocs-storagecluster
+  namespace: openshift-storage
+spec:
+  # ODF's default profile is sized for 16 vCPU / 64 GiB nodes. On the
+  # m5.2xlarge (8 vCPU / 32 GiB) nodes created by add-odf-nodes.sh, the
+  # default requests do not fit and pods stay Pending. `lean` is what makes
+  # this deployable. Use `balanced` or `performance` on larger nodes.
+  resourceProfile: lean
+
+  monDataDirHostPath: /var/lib/rook
+  manageNodes: false            # nodes are labelled/tainted by add-odf-nodes.sh
+
+  storageDeviceSets:
+    - name: ocs-deviceset-localblock
+      count: 1                  # devices per node
+      replica: 3                # one OSD on each of the 3 storage nodes
+      portable: false           # local disks cannot migrate between nodes
+      dataPVCTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: localblock
+          volumeMode: Block
+          resources:
+            requests:
+              storage: 120Gi
+
+  # No tolerations needed here: node.ocs.openshift.io/storage is the taint key
+  # ODF recognises, and its components tolerate it automatically. Only LSO
+  # (file 02) needs them spelled out.
