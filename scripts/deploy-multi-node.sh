@@ -51,7 +51,7 @@ log() { echo "$(date +%H:%M:%S) ── $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 check_prereqs() {
-  for cmd in openshift-install oc qemu-img aws jq; do
+  for cmd in openshift-install oc qemu-img aws jq nmstatectl; do
     command -v "$cmd" >/dev/null 2>&1 || die "$cmd not found in PATH"
   done
   [[ -f "$PULL_SECRET_FILE" ]] || die "Pull secret not found: $PULL_SECRET_FILE"
@@ -155,6 +155,7 @@ aws ec2 authorize-security-group-ingress \
   --group-id ${SG_ID} --protocol udp --port 6081 --cidr ${SUBNET_CIDR} >/dev/null
 
 log "SG: ${SG_ID}"
+save_state
 
 # ── Step 2: Pre-create ENIs ────────────────────────────────────────────────────
 
@@ -190,6 +191,8 @@ for i in 0 1 2; do
   WORKER_MACS+=("${mac}")
   log "  ${WORKER_HOSTNAMES[$i]}: ${eni_id} (${mac})"
 done
+
+save_state
 
 # ── Step 3: EC2 Key Pair ──────────────────────────────────────────────────────
 
@@ -287,13 +290,14 @@ aws elbv2 create-listener --load-balancer-arn ${INGRESS_NLB_ARN} \
   --default-actions Type=forward,TargetGroupArn=${HTTPS_TG_ARN} >/dev/null
 
 log "Target groups and listeners created"
+save_state
 
 # ── Step 5: DNS Records ───────────────────────────────────────────────────────
 
 log "Creating DNS records..."
 ZONE_ID=$(aws route53 list-hosted-zones-by-name \
   --dns-name "${BASE_DOMAIN}" \
-  --query 'HostedZones[0].Id' --output text | sed 's|/hostedzone/||')
+  --query "HostedZones[?Name=='${BASE_DOMAIN}.'].Id | [0]" --output text | sed 's|/hostedzone/||')
 
 [[ -z "${ZONE_ID}" || "${ZONE_ID}" == "None" ]] && die "No Route 53 hosted zone found for ${BASE_DOMAIN}"
 
@@ -317,6 +321,7 @@ aws route53 change-resource-record-sets --hosted-zone-id ${ZONE_ID} \
 
 log "DNS: api.${CLUSTER_NAME}.${BASE_DOMAIN} → API NLB"
 log "DNS: *.apps.${CLUSTER_NAME}.${BASE_DOMAIN} → Ingress NLB"
+save_state
 
 # ── Step 6: Generate Agent ISO ─────────────────────────────────────────────────
 
@@ -505,6 +510,7 @@ AMI_ID=$(aws ec2 register-image \
       \"DeleteOnTermination\":true}}
   ]" --query 'ImageId' --output text)
 log "AMI: ${AMI_ID}"
+save_state
 
 # ── Step 8: Launch Instances ───────────────────────────────────────────────────
 

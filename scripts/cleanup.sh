@@ -92,7 +92,26 @@ for nlb_arn in "${API_NLB_ARN:-}" "${INGRESS_NLB_ARN:-}"; do
   fi
 done
 
-sleep 5
+# NLB deletion is asynchronous. The load balancer's hidden ENIs keep holding the
+# subnet and the IGW attachment for several minutes after the API call returns,
+# which silently fails the subnet/IGW/VPC deletions further down. Wait them out.
+for nlb_arn in "${API_NLB_ARN:-}" "${INGRESS_NLB_ARN:-}"; do
+  if [[ -n "${nlb_arn}" ]]; then
+    log "Waiting for NLB to finish deleting..."
+    aws elbv2 wait load-balancers-deleted --load-balancer-arns "${nlb_arn}" 2>/dev/null || true
+  fi
+done
+
+if [[ -n "${VPC_ID:-}" ]]; then
+  for i in $(seq 1 30); do
+    REMAINING=$(aws ec2 describe-network-interfaces \
+      --filters "Name=vpc-id,Values=${VPC_ID}" \
+      --query 'length(NetworkInterfaces)' --output text 2>/dev/null || echo 0)
+    [[ "${REMAINING}" == "0" ]] && break
+    log "  Waiting for ${REMAINING} ENI(s) to drain from VPC..."
+    sleep 10
+  done
+fi
 
 for tg_arn in "${API_TG_ARN:-}" "${MCS_TG_ARN:-}" "${HTTP_TG_ARN:-}" "${HTTPS_TG_ARN:-}"; do
   if [[ -n "${tg_arn}" ]]; then

@@ -144,6 +144,7 @@ export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
 | `openshift-install` | Version matching your target OCP release (tested with 4.22.x) |
 | `oc` | OpenShift CLI for post-install verification |
 | `oc-mirror` v2 | Mirror container images for disconnected deployments |
+| `nmstatectl` | Required by `openshift-install` to validate each host's `networkConfig` (`dnf install nmstate`) |
 | `qemu-img` | For converting the ISO to a raw disk image |
 | `jq` | For parsing JSON responses during snapshot import |
 | AWS CLI v2 | Configured with EC2, S3, ELBv2, Route 53, IAM permissions |
@@ -197,3 +198,5 @@ These are hard-won findings from deploying on EC2 — not documented in the Open
 | Podman not available on Amazon Linux 2023 | Default repos do not include podman | Use Docker (`dnf install docker`) for the mirror registry container |
 | oc-mirror fails partway through | Network timeouts on large blob uploads | Re-run the same command — oc-mirror v2 is idempotent |
 | Node stops instead of rebooting | Agent installer on EC2 occasionally triggers shutdown instead of reboot | Manually start the instance — installation resumes automatically |
+| `nmstatectl: executable file not found` | `openshift-install` shells out to it to validate every host's `networkConfig`; not in the prerequisites | `dnf install nmstate`, or extract the binary from the RPM if you lack root |
+| Hundreds of `Failed` router pods | Router pods bind host ports 80/443, so only one runs per node; rejected pods accumulate | Cosmetic. `oc delete pods -n openshift-ingress --field-selector status.phase=Failed` |
