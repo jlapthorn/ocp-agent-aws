@@ -20,6 +20,14 @@ Because EC2 cannot boot from ISO files directly, the workflow converts the ISO i
 | [Disconnected SNO](docs/disconnected-sno-deployment.md) | 1 registry + 1 node | t3.medium (registry) + m6i.2xlarge (SNO) |
 | [Disconnected Multi-Node (3+3)](docs/disconnected-multi-node-deployment.md) | 1 registry + 3 control plane + 3 worker | t3.medium (registry) + m5.2xlarge (masters) + m5.xlarge (workers) |
 
+### Day-2 additions
+
+| Guide | What it adds | Instance Types |
+|-------|--------------|----------------|
+| [ODF Storage Nodes](docs/odf-storage-nodes.md) | 3 dedicated storage nodes, each with an extra raw 120 GB EBS volume for OpenShift Data Foundation | m5.2xlarge |
+
+Day-2 nodes are added with `oc adm node-image create` against the running cluster — no need to regenerate the original agent ISO or keep installer state.
+
 Disconnected deployments deploy a private Docker v2 registry on a separate EC2 instance, mirror OCP release images to it with [oc-mirror v2](https://docs.openshift.com/container-platform/latest/installing/disconnected_install/about-installing-oc-mirror-v2.html), and install OpenShift using only the mirror registry for image pulls. The cluster nodes access the registry over the VPC private network.
 
 ## Architecture
@@ -137,6 +145,14 @@ export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
 ./scripts/deploy-sno-disconnected.sh
 ```
 
+### Day-2: add ODF storage nodes
+
+```bash
+# Against a cluster already deployed with deploy-multi-node.sh
+export INSTALL_DIR=~/ocp-agent-aws AWS_REGION=us-east-2
+./scripts/add-odf-nodes.sh
+```
+
 ## Prerequisites
 
 | Requirement | Details |
@@ -160,7 +176,8 @@ export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
 │   ├── sno-deployment.md                      # Connected SNO guide
 │   ├── multi-node-deployment.md               # Connected 3+3 multi-node guide
 │   ├── disconnected-sno-deployment.md         # Disconnected SNO with mirror registry
-│   └── disconnected-multi-node-deployment.md  # Disconnected 3+3 with mirror registry
+│   ├── disconnected-multi-node-deployment.md  # Disconnected 3+3 with mirror registry
+│   └── odf-storage-nodes.md                   # Day-2: ODF storage nodes with extra EBS volumes
 ├── examples/
 │   ├── sno/
 │   │   ├── install-config.yaml
@@ -172,14 +189,17 @@ export SSH_KEY_FILE=~/.ssh/id_ed25519.pub
 │   │   ├── install-config.yaml        # + imageContentSources, additionalTrustBundle
 │   │   ├── agent-config.yaml
 │   │   └── imageset-config.yaml       # oc-mirror v2 ImageSetConfiguration
-│   └── disconnected-multi-node/
-│       ├── install-config.yaml
-│       ├── agent-config.yaml
-│       └── imageset-config.yaml
+│   ├── disconnected-multi-node/
+│   │   ├── install-config.yaml
+│   │   ├── agent-config.yaml
+│   │   └── imageset-config.yaml
+│   └── odf-nodes/
+│       └── nodes-config.yaml          # Day-2 node definitions for oc adm node-image create
 └── scripts/
     ├── deploy-sno.sh                  # Connected SNO deployment
     ├── deploy-multi-node.sh           # Connected multi-node deployment
     ├── deploy-sno-disconnected.sh     # Disconnected SNO deployment
+    ├── add-odf-nodes.sh               # Day-2 ODF storage nodes
     └── cleanup.sh                     # Resource teardown (all topologies)
 ```
 
@@ -199,4 +219,6 @@ These are hard-won findings from deploying on EC2 — not documented in the Open
 | oc-mirror fails partway through | Network timeouts on large blob uploads | Re-run the same command — oc-mirror v2 is idempotent |
 | Node stops instead of rebooting | Agent installer on EC2 occasionally triggers shutdown instead of reboot | Manually start the instance — installation resumes automatically |
 | `nmstatectl: executable file not found` | `openshift-install` shells out to it to validate every host's `networkConfig`; not in the prerequisites | `dnf install nmstate`, or extract the binary from the RPM if you lack root |
+| RHCOS installs onto the ODF data disk | A second ≥100 GB volume makes `rootDeviceHints.minSizeGigabytes` ambiguous | Attach extra data volumes *after* the node joins, not in the AMI |
+| Data volumes survive `cleanup.sh` | Volumes from `create-volume` default to `DeleteOnTermination=false`, and cleanup only terminates instances | Set `DeleteOnTermination=true` via `modify-instance-attribute` after attaching |
 | Hundreds of `Failed` router pods | Router pods bind host ports 80/443, so only one runs per node; rejected pods accumulate | Cosmetic. `oc delete pods -n openshift-ingress --field-selector status.phase=Failed` |
