@@ -38,13 +38,36 @@ KEY_NAME="ocp-agent-key"
 log() { echo "$(date +%H:%M:%S) ── $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-for cmd in openshift-install oc qemu-img aws jq; do
+for cmd in openshift-install oc qemu-img aws jq nmstatectl; do
   command -v "$cmd" >/dev/null 2>&1 || die "$cmd not found in PATH"
 done
 [[ -f "$PULL_SECRET_FILE" ]] || die "Pull secret not found: $PULL_SECRET_FILE"
 [[ -f "$SSH_KEY_FILE" ]] || die "SSH key not found: $SSH_KEY_FILE"
 
 mkdir -p "${INSTALL_DIR}"
+
+# Write what has been created so far. Called after every resource-creating
+# step so that a mid-run failure still leaves cleanup.sh something to work
+# from — without this, an early failure orphans everything silently.
+save_state() {
+  cat > "${INSTALL_DIR}/resource-ids.env" <<EOF
+CLUSTER_NAME=${CLUSTER_NAME:-}
+BASE_DOMAIN=${BASE_DOMAIN:-}
+VPC_ID=${VPC_ID:-}
+SUBNET_ID=${SUBNET_ID:-}
+IGW_ID=${IGW_ID:-}
+SG_ID=${SG_ID:-}
+ENI_ID=${ENI_ID:-}
+EIP_ALLOC=${EIP_ALLOC:-}
+EIP_ADDR=${EIP_ADDR:-}
+BUCKET_NAME=${BUCKET_NAME:-}
+SNAP_ID=${SNAP_ID:-}
+AMI_ID=${AMI_ID:-}
+INSTANCE_ID=${INSTANCE_ID:-}
+ZONE_ID=${ZONE_ID:-}
+KEY_NAME=${KEY_NAME:-}
+EOF
+}
 
 # ── Step 1: VPC and Networking ─────────────────────────────────────────────────
 
@@ -80,6 +103,7 @@ aws ec2 authorize-security-group-ingress \
   --group-id ${SG_ID} --protocol tcp --port 30000-32767 --cidr 0.0.0.0/0 >/dev/null
 
 log "VPC: ${VPC_ID} | Subnet: ${SUBNET_ID} | SG: ${SG_ID}"
+save_state
 
 # ── Step 2: ENI, EIP, Key Pair ─────────────────────────────────────────────────
 
@@ -102,12 +126,13 @@ log "EIP: ${EIP_ADDR}"
 
 aws ec2 import-key-pair --key-name ${KEY_NAME} \
   --public-key-material fileb://${SSH_KEY_FILE} 2>/dev/null || true
+save_state
 
 # ── Step 3: DNS ────────────────────────────────────────────────────────────────
 
 log "Creating DNS records..."
 ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "${BASE_DOMAIN}" \
-  --query 'HostedZones[0].Id' --output text | sed 's|/hostedzone/||')
+  --query "HostedZones[?Name=='${BASE_DOMAIN}.'].Id | [0]" --output text | sed 's|/hostedzone/||')
 [[ -z "${ZONE_ID}" || "${ZONE_ID}" == "None" ]] && die "No Route 53 zone for ${BASE_DOMAIN}"
 
 aws route53 change-resource-record-sets --hosted-zone-id ${ZONE_ID} \
@@ -125,6 +150,7 @@ aws route53 change-resource-record-sets --hosted-zone-id ${ZONE_ID} \
     ]
   }" >/dev/null
 log "DNS configured"
+save_state
 
 # ── Step 4: Generate Agent ISO ─────────────────────────────────────────────────
 
@@ -251,6 +277,7 @@ AMI_ID=$(aws ec2 register-image \
       \"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}
   ]" --query 'ImageId' --output text)
 log "AMI: ${AMI_ID}"
+save_state
 
 # ── Step 6: Launch Instance ────────────────────────────────────────────────────
 
@@ -267,23 +294,7 @@ aws ec2 associate-address --allocation-id ${EIP_ALLOC} --network-interface-id ${
 log "Instance ${INSTANCE_ID} running at ${EIP_ADDR}"
 
 # Save resource IDs
-cat > "${INSTALL_DIR}/resource-ids.env" <<EOF
-CLUSTER_NAME=${CLUSTER_NAME}
-BASE_DOMAIN=${BASE_DOMAIN}
-VPC_ID=${VPC_ID}
-SUBNET_ID=${SUBNET_ID}
-IGW_ID=${IGW_ID}
-SG_ID=${SG_ID}
-ENI_ID=${ENI_ID}
-EIP_ALLOC=${EIP_ALLOC}
-EIP_ADDR=${EIP_ADDR}
-BUCKET_NAME=${BUCKET_NAME}
-SNAP_ID=${SNAP_ID}
-AMI_ID=${AMI_ID}
-INSTANCE_ID=${INSTANCE_ID}
-ZONE_ID=${ZONE_ID}
-KEY_NAME=${KEY_NAME}
-EOF
+save_state
 
 # ── Step 7: Monitor Installation ───────────────────────────────────────────────
 
